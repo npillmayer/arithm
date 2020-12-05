@@ -1,3 +1,3 @@
 # Arithmetic Functions
 
-Solver for linear equations
+Affine transforms, a solver for linear equations, paths…
