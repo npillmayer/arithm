@@ -1,2 +1,3 @@
-# arithm
-Arithmetic Functions and linear Equation Solver
+# Arithmetic Functions
+
+Solver for linear equations
