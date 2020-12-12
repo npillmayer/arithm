@@ -84,7 +84,7 @@ func New(c float64, tms ...X) (Polynomial, error) { // construct a polynomial
 	return p, err
 }
 
-// Polynomial is a type for linear Polynomials
+// Polynomial is a type for linear polynomials
 //
 //     c + a.1 x.1 + a.2 x.2 + ... a.n x.n .
 //
@@ -97,16 +97,24 @@ type Polynomial struct {
 
 // NewConstantPolynomial creates a Polynomial consisting of just a constant term.
 func NewConstantPolynomial(c float64) Polynomial {
-	m := treemap.NewWithIntComparator()
-	p := Polynomial{m}
+	//m := treemap.NewWithIntComparator()
+	//p := Polynomial{m}
+	p := Polynomial{}
+	p.checkTerms()
 	p.Terms.Put(0, c) // initialize with constant term (at position 0)
 	return p.Zap()
 }
 
+func (p *Polynomial) checkTerms() {
+	if p.Terms == nil {
+		p.Terms = treemap.NewWithIntComparator()
+	}
+}
+
 // SetTerm sets the coefficient for a term a.i within a Polynomial.
-// For i=0: constant term. If this is a Pair Polynomial and i = 0, then
-// the constant term will be set to (scale,scale).
+// For i=0, sets the constant term.
 func (p Polynomial) SetTerm(i int, scale float64) Polynomial {
+	p.checkTerms()
 	p.Terms.Put(i, scale)
 	return p
 }
@@ -132,6 +140,7 @@ func (p Polynomial) isOff() (float64, bool) {
 // If no free variable can be found, find max(dependent(a.j)).
 //
 func (p Polynomial) maxCoeff(dependents maps.Map) (int, float64) {
+	p.checkTerms()
 	it := p.Terms.Iterator()
 	var maxp int      // variable position of max coeff
 	var maxc = 0.0    // max coeff
@@ -164,6 +173,7 @@ func (p Polynomial) maxCoeff(dependents maps.Map) (int, float64) {
 // This routine is detructive!
 //
 func (p Polynomial) substitute(i int, p2 Polynomial) Polynomial {
+	p.checkTerms()
 	scale_i := p2.GetCoeffForTerm(i)
 	if !arithm.Is0(scale_i) {
 		panic(fmt.Sprintf("cyclic call to substitute term #%d: %s", i, p2.String()))
@@ -184,6 +194,7 @@ func (p Polynomial) substitute(i int, p2 Polynomial) Polynomial {
 // CopyPolynomial makes a copy of a numeric Polynomial.
 func (p Polynomial) CopyPolynomial() Polynomial {
 	p1 := NewConstantPolynomial(0.0) // will become our return value
+	p.checkTerms()
 	it := p.Terms.Iterator()
 	for it.Next() { // copy all terms of p into p1
 		pos := it.Key().(int)
@@ -198,6 +209,7 @@ func (p Polynomial) CopyPolynomial() Polynomial {
 // Flag doAdd signals addition or subtraction.
 //
 func (p Polynomial) addOrSub(p2 Polynomial, doAdd bool, destructive bool) Polynomial {
+	p.checkTerms()
 	p1 := p.CopyPolynomial() // will become our return value
 	it2 := p2.Terms.Iterator()
 	for it2.Next() { // inspect all terms of p2
@@ -229,6 +241,7 @@ func (p Polynomial) Add(p2 Polynomial, destructive bool) Polynomial {
 			return p.addOrSub(p2, true, destructive)
 		}
 	*/
+	p.checkTerms()
 	return p.addOrSub(p2, true, destructive)
 }
 
@@ -242,6 +255,7 @@ func (p Polynomial) Subtract(p2 Polynomial, destructive bool) Polynomial {
 			return p.addOrSub(p2, false, destructive)
 		}
 	*/
+	p.checkTerms()
 	return p.addOrSub(p2, false, destructive)
 }
 
@@ -253,6 +267,7 @@ func (p Polynomial) Multiply(p2 Polynomial, destructive bool) Polynomial {
 			return p.MultiplyPair(p2, destructive)
 		} else {
 	*/
+	p.checkTerms()
 	p1 := p.CopyPolynomial()      // will become our return value
 	c, isconst := p2.IsConstant() // is p2 constant?
 	if !isconst {
@@ -278,6 +293,7 @@ func (p Polynomial) Multiply(p2 Polynomial, destructive bool) Polynomial {
 // Divide divides two polynomial by a numeric (not 0).
 // p2 will be destroyed.
 func (p Polynomial) Divide(p2 Polynomial, destructive bool) Polynomial {
+	p.checkTerms()
 	c, isconst := p2.IsConstant() // is p2 constant?
 	if !isconst || arithm.Is0(c) {
 		panic(fmt.Sprintf("illegal divisor: %s", p2.String()))
@@ -290,6 +306,7 @@ func (p Polynomial) Divide(p2 Polynomial, destructive bool) Polynomial {
 
 // Zap eliminates all terms with coefficient=0 from a polynomial.
 func (p Polynomial) Zap() Polynomial {
+	p.checkTerms()
 	positions := p.Terms.Keys()     // all non-Zero terms of p
 	for _, pos := range positions { // inspect terms
 		//if !(p.ispair && pos == 0) {
@@ -307,7 +324,6 @@ func (p Polynomial) Zap() Polynomial {
 
 // IsConstant checks wether
 // a Polynomial is a constant, i.e. p = { c }? Returns the constant and a flag.
-// If p is a Pair Polynomial, this method will return xpart(c).
 func (p Polynomial) IsConstant() (float64, bool) {
 	/*
 		if p.ispair {
@@ -323,6 +339,7 @@ func (p Polynomial) IsConstant() (float64, bool) {
 // a Polynomial is a variable?, i.e. a single term with coefficient = 1.
 // Returns the position of the term and a flag.
 func (p Polynomial) IsVariable() (int, bool) {
+	p.checkTerms()
 	if p.Terms.Size() == 2 { // ok: p = a*x.i + c
 		if arithm.Is0(p.GetCoeffForTerm(0)) { // if c == 0
 			positions := p.Terms.Keys() // all non-Zero Terms of p, ordered
@@ -356,6 +373,7 @@ func (p Polynomial) GetConstantValue() float64 {
 func (p Polynomial) GetCoeffForTerm(i int) float64 {
 	var sc interface{}
 	var found bool
+	p.checkTerms()
 	sc, found = p.Terms.Get(i)
 	if found {
 		return sc.(float64)
@@ -395,6 +413,7 @@ func (p Polynomial) String() string {
 // the position of the term. Coefficients are rounded to the 3rd place.
 func (p Polynomial) TraceString(resolv VariableResolver) string {
 	var buffer bytes.Buffer
+	p.checkTerms()
 	it := p.Terms.Iterator()
 	var indent = false // no space before first term (usually constant)
 	for it.Next() {
