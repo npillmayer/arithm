@@ -1,10 +1,15 @@
 module github.com/npillmayer/arithm
 
-go 1.16
+go 1.25
 
 require (
 	github.com/akavel/polyclip-go v0.0.0-20160111220610-2cfdb71461bd
-	github.com/emirpasic/gods v1.12.0
-	github.com/npillmayer/schuko v0.1.0
-	github.com/stretchr/testify v1.6.1
+	github.com/npillmayer/schuko v0.2.0-alpha.3
+	github.com/stretchr/testify v1.7.0
+)
+
+require (
+	github.com/davecgh/go-spew v1.1.1 // indirect
+	github.com/pmezard/go-difflib v1.0.0 // indirect
+	gopkg.in/yaml.v3 v3.0.0-20200313102051-9f266ea9e77c // indirect
 )
