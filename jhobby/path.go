@@ -6,7 +6,6 @@ import (
 	"math/cmplx"
 
 	"github.com/npillmayer/arithm"
-	"github.com/npillmayer/schuko/gconf"
 	"github.com/npillmayer/schuko/tracing"
 )
 
@@ -727,9 +726,7 @@ func setControls(path HobbyPath, theta []float64, controls SplineControls) Splin
 		controls.SetPostControl(i%n, path.Z(i)+p2)
 		controls.SetPreControl((i+1)%n, path.Z(i+1)-p3)
 	}
-	if gconf.IsSet("tracingchoices") {
-		tracer().Infof(AsString(path, controls))
-	}
+	tracer().Infof(AsString(path, controls))
 	return controls
 }
 
@@ -835,11 +832,9 @@ func makePathSegment(path HobbyPath, from, to int) *pathPartial {
 		start: from, // first index within parent path
 		end:   to,   // last index within parent path
 	}
-	if gconf.IsSet("tracingchoices") {
-		tracer().Debugf("breaking segment %d - %d of length %d, at %s and %s", from, to, partial.N(),
-			ptstring(path.Z(from), false), ptstring(path.Z(to), false))
-		tracer().Infof("partial = %s", AsString(partial, nil))
-	}
+	tracer().Debugf("breaking segment %d - %d of length %d, at %s and %s", from, to, partial.N(),
+		ptstring(path.Z(from), false), ptstring(path.Z(to), false))
+	tracer().Infof("partial = %s", AsString(partial, nil))
 	return partial
 }
 
