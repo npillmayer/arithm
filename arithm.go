@@ -236,8 +236,8 @@ func dotProd(vec1, vec2 []float64) float64 {
 // without changing the argument(s).
 func (m AT) Combine(n AT) AT {
 	o := newAT()
-	for row := 0; row < 3; row++ {
-		for col := 0; col < 3; col++ {
+	for row := range 3 {
+		for col := range 3 {
 			o.set(row, col, dotProd(n.row(row), m.col(col)))
 		}
 	}

@@ -3,7 +3,6 @@ module github.com/npillmayer/arithm
 go 1.25
 
 require (
-	github.com/akavel/polyclip-go v0.0.0-20160111220610-2cfdb71461bd
 	github.com/npillmayer/schuko v0.2.0-alpha.3
 	github.com/stretchr/testify v1.7.0
 )
