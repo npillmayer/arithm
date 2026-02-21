@@ -43,26 +43,24 @@ path building very loosely follows the ideas in PyX.
 Usage
 
 Clients of the package usually build a "skeleton" path, without any
-spline control point information. Such a path is called a "HobbyPath" and
-it may contain various parameters at knots and/or joins. In the
+spline control point information. It may contain various parameters at
+knots and/or joins. In the
 MetaFont/MetaPost DSL one may specify it as follows:
 
    (0,0)..(2,3)..tension 1.4..(5,3)..(3,-1){left}..cycle
 
 On evaluation of this path expression, MetaFont/MetaPost immediately will
 find the control points in a clever way to construct a smooth curve through
-the knots of the path. When using the methods of package "path", clients will
+the knots of the path. When using the methods of package "jhobby", clients will
 build a skeleton path with a kind of builder pattern (package qualifiers
 omitted for clarity and brevity):
 
    Nullpath().Knot(P(0,0)).Curve().Knot(P(2,3)).TensionCurve(N(1.4),N(1.4)).Knot(P(5,3))
       .Curve().DirKnot(P(3,-1),P(-1,0)).Curve().Cycle()
 
-Alternatively clients may put interface HobbyCurve over their own path
-data structure. Either way, a HobbyPath will then be subjected to a call to
-FindHobbyControls(...)
+A built path is then subjected to a call to FindHobbyControls(...)
 
-   controls = FindHobbyControls(path, nil)
+   controls, err := FindHobbyControls(path, nil)
 
 which returns the necessary control point information to produce a smooth
 curve:
@@ -99,3 +97,44 @@ All rights reserved.
 Please refer to the license file for more information.
 */
 package jhobby
+
+import "fmt"
+
+// AsString returns
+// a path -- optionally including spline control points -- as a (debugging)
+// string. The string contains newlines if control point information is present.
+// Otherwise it will include the knot coordinates in one line.
+//
+// Example, a circle of diameter 1 around (2,1):
+//
+//	(1,1) .. controls (1.0000,1.5523) and (1.4477,2.0000)
+//	  .. (2,2) .. controls (2.5523,2.0000) and (3.0000,1.5523)
+//	  .. (3,1) .. controls (3.0000,0.4477) and (2.5523,0.0000)
+//	  .. (2,0) .. controls (1.4477,0.0000) and (1.0000,0.4477)
+//	  .. cycle
+//
+// The format is not fully equivalent to MetaFont's, but close.
+func AsString(path *Path, contr *Controls) string {
+	var s string
+	for i := 0; i < path.N(); i++ {
+		pt := path.Z(i)
+		if i > 0 {
+			if contr != nil {
+				s += fmt.Sprintf(" and %s\n  .. ", ptstring(contr.PreControl(i), true))
+			} else {
+				s += " .. "
+			}
+		}
+		s += fmt.Sprintf("%s", ptstring(pt, false))
+		if contr != nil && (i < path.N()-1 || path.IsCycle()) {
+			s += fmt.Sprintf(" .. controls %s", ptstring(contr.PostControl(i), true))
+		}
+	}
+	if path.IsCycle() {
+		if contr != nil {
+			s += fmt.Sprintf(" and %s\n ", ptstring(contr.PreControl(0), true))
+		}
+		s += " .. cycle"
+	}
+	return s
+}
