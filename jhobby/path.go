@@ -7,13 +7,12 @@ import (
 
 	"github.com/npillmayer/arithm"
 	"github.com/npillmayer/schuko/gconf"
-	"github.com/npillmayer/schuko/gtrace"
 	"github.com/npillmayer/schuko/tracing"
 )
 
-// T is tracing to the graphics tracer.
-func T() tracing.Trace {
-	return gtrace.GraphicsTracer
+// tracer writes to trace with key 'graphics'
+func tracer() tracing.Trace {
+	return tracing.Select("graphics")
 }
 
 const pi float64 = 3.14159265
@@ -84,11 +83,11 @@ type SplineControls interface {
 //
 // Example, a circle of diameter 1 around (2,1):
 //
-//     (1,1) .. controls (1.0000,1.5523) and (1.4477,2.0000)
-//       .. (2,2) .. controls (2.5523,2.0000) and (3.0000,1.5523)
-//       .. (3,1) .. controls (3.0000,0.4477) and (2.5523,0.0000)
-//       .. (2,0) .. controls (1.4477,0.0000) and (1.0000,0.4477)
-//       .. cycle
+//	(1,1) .. controls (1.0000,1.5523) and (1.4477,2.0000)
+//	  .. (2,2) .. controls (2.5523,2.0000) and (3.0000,1.5523)
+//	  .. (3,1) .. controls (3.0000,0.4477) and (2.5523,0.0000)
+//	  .. (2,0) .. controls (1.4477,0.0000) and (1.0000,0.4477)
+//	  .. cycle
 //
 // The format is not fully equivalent to MetaFont's, but close.
 func AsString(path HobbyPath, contr SplineControls) string {
@@ -203,9 +202,9 @@ var _ JoinAdder = &Path{}
 // calls. the following example builds a closed path of three knots, which are
 // connected by a curve, then a straight line, and a curve again.
 //
-//     var path HobbyPath
-//     var controls SplineControls
-//     path, controls = Nullpath().Knot(0,0).Curve().Knot(3,2).Line().Knot(5,2.5).Curve().Cycle()
+//	var path HobbyPath
+//	var controls SplineControls
+//	path, controls = Nullpath().Knot(0,0).Curve().Knot(3,2).Line().Knot(5,2.5).Curve().Cycle()
 //
 // Calling Cycle() or End() returns a path and a container for spline control point
 // information. The latter is empty and to be filled by calculating the Hobby
@@ -301,7 +300,7 @@ func (path *Path) TensionCurve(t1, t2 float64) KnotAdder {
 // AppendSubpath concatenates two paths at an overlapping knot.
 // Part of builder functionality.
 func (path *Path) AppendSubpath(sp *Path) JoinAdder {
-	T().Errorf("AppendSubpath not yet implemented")
+	tracer().Errorf("AppendSubpath not yet implemented")
 	return path
 }
 
@@ -555,7 +554,7 @@ func FindHobbyControls(path HobbyPath, controls SplineControls) SplineControls {
 	if len(segments) > 0 {
 		for _, segment := range segments {
 			segment.controls = controls
-			T().Infof("find controls for segment %s", AsString(segment, nil))
+			tracer().Infof("find controls for segment %s", AsString(segment, nil))
 			findSegmentControls(segment, segment)
 		}
 	}
@@ -602,16 +601,16 @@ func startOpen(path HobbyPath, theta, u, v []float64) {
 	if cmplx.IsNaN(path.PostDir(0).C()) {
 		a := recip(path.PostTension(0))
 		b := recip(path.PreTension(1))
-		T().Debugf("path.PostCurl(0) = %.4g", path.PostCurl(0))
+		tracer().Debugf("path.PostCurl(0) = %.4g", path.PostCurl(0))
 		c := square(a) * path.PostCurl(0) / square(b)
-		T().Debugf("a = %.4g, b = %.4g, c = %.4g", a, b, c)
+		tracer().Debugf("a = %.4g, b = %.4g, c = %.4g", a, b, c)
 		u[0] = ((3-a)*c + b) / (a*c + 3 - b)
 		v[0] = -u[0] * psi(path, 1)
 	} else {
 		u[0] = 0
 		v[0] = reduceAngle(angle(path.PostDir(0)) - angle(delta(path, 0)))
 	}
-	T().Debugf("u.0 = %.4g, v.0 = %.4g", u[0], v[0])
+	tracer().Debugf("u.0 = %.4g, v.0 = %.4g", u[0], v[0])
 }
 
 func endOpen(path HobbyPath, theta, u, v []float64) {
@@ -619,18 +618,18 @@ func endOpen(path HobbyPath, theta, u, v []float64) {
 	if cmplx.IsNaN(path.PreDir(last).C()) {
 		a := recip(path.PostTension(last - 1))
 		b := recip(path.PreTension(last))
-		T().Debugf("path.PreCurl(%d) = %.4g", last, path.PostCurl(last))
+		tracer().Debugf("path.PreCurl(%d) = %.4g", last, path.PostCurl(last))
 		c := square(b) * path.PreCurl(last) / square(a)
 		u[last] = (b*c + 3 - a) / ((3-b)*c + a)
-		T().Debugf("u.%d = %g", last, u[last])
+		tracer().Debugf("u.%d = %g", last, u[last])
 		theta[last] = v[last-1] / (u[last-1] - u[last])
 	} else {
 		theta[last] = reduceAngle(angle(path.PreDir(last)) - angle(delta(path, last-1)))
 	}
-	T().Debugf("theta.%d = %.4g", last, rad2deg(theta[last]))
+	tracer().Debugf("theta.%d = %.4g", last, rad2deg(theta[last]))
 	for i := last - 1; i >= 0; i-- {
 		theta[i] = v[i] - u[i]*theta[i+1]
-		T().Debugf("theta.%d = %.4g", i, rad2deg(theta[i]))
+		tracer().Debugf("theta.%d = %.4g", i, rad2deg(theta[i]))
 	}
 }
 
@@ -668,19 +667,19 @@ func buildEqs(path HobbyPath, u, v, w []float64) {
 		a1 := recip(path.PostTension(i))
 		b1 := recip(path.PreTension(i))
 		b2 := recip(path.PreTension(i + 1))
-		T().Debugf("1/tensions: %.4g, %.4g, %.4g, %.4g", a0, a1, b1, b2)
+		tracer().Debugf("1/tensions: %.4g, %.4g, %.4g, %.4g", a0, a1, b1, b2)
 		A := a0 / (square(b1) * d(path, i-1))
 		B := (3 - a0) / (square(b1) * d(path, i-1))
 		C := (3 - b2) / (square(a1) * d(path, i))
 		D := b2 / (square(a1) * d(path, i))
-		T().Debugf("A, B, C, D: %.4g, %.4g, %.4g, %.4g", A, B, C, D)
+		tracer().Debugf("A, B, C, D: %.4g, %.4g, %.4g, %.4g", A, B, C, D)
 		t := B - u[i-1]*A + C
 		u[i] = D / t
 		v[i] = (-B*psi(path, i) - D*psi(path, i+1) - A*v[i-1]) / t
 		if path.IsCycle() {
 			w[i] = -A * w[i-1] / t
 		}
-		T().Debugf("u.%d = %.4g, v.%d = %.4g", i, u[i], i, v[i])
+		tracer().Debugf("u.%d = %.4g, v.%d = %.4g", i, u[i], i, v[i])
 	}
 }
 
@@ -729,7 +728,7 @@ func setControls(path HobbyPath, theta []float64, controls SplineControls) Splin
 		controls.SetPreControl((i+1)%n, path.Z(i+1)-p3)
 	}
 	if gconf.IsSet("tracingchoices") {
-		T().Infof(AsString(path, controls))
+		tracer().Infof(AsString(path, controls))
 	}
 	return controls
 }
@@ -837,9 +836,9 @@ func makePathSegment(path HobbyPath, from, to int) *pathPartial {
 		end:   to,   // last index within parent path
 	}
 	if gconf.IsSet("tracingchoices") {
-		T().Debugf("breaking segment %d - %d of length %d, at %s and %s", from, to, partial.N(),
+		tracer().Debugf("breaking segment %d - %d of length %d, at %s and %s", from, to, partial.N(),
 			ptstring(path.Z(from), false), ptstring(path.Z(to), false))
-		T().Infof("partial = %s", AsString(partial, nil))
+		tracer().Infof("partial = %s", AsString(partial, nil))
 	}
 	return partial
 }

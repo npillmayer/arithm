@@ -146,9 +146,9 @@ func TestOpen(t *testing.T) {
 	teardown := gotestingadapter.RedirectTracing(t)
 	defer teardown()
 	path, controls := testpath()
-	t.Logf(AsString(path, nil))
+	t.Log(AsString(path, nil))
 	controls = FindHobbyControls(path, controls)
-	t.Logf(AsString(path, controls))
+	t.Log(AsString(path, controls))
 }
 
 func TestCycle(t *testing.T) {
@@ -156,9 +156,9 @@ func TestCycle(t *testing.T) {
 	defer teardown()
 	p, _ := testpath()
 	path, controls := p.Knot(arithm.P(2, 0)).Curve().Cycle()
-	t.Logf(AsString(path, nil))
+	t.Log(AsString(path, nil))
 	controls = FindHobbyControls(path, controls)
-	t.Logf(AsString(path, controls))
+	t.Log(AsString(path, controls))
 }
 
 // Draw a cicle with diameter 1 around (2,1). The builder statement returns
@@ -217,7 +217,7 @@ func TestSegments(t *testing.T) {
 func TestSegmentedPath(t *testing.T) {
 	teardown := gotestingadapter.RedirectTracing(t)
 	defer teardown()
-	T().SetTraceLevel(tracing.LevelInfo)
+	tracer().SetTraceLevel(tracing.LevelInfo)
 	path, controls := Nullpath().Knot(arithm.P(1, 1)).Line().Knot(arithm.P(2, 2)).Line().Knot(arithm.P(3, 1)).End()
 	controls = FindHobbyControls(path, controls)
 }
