@@ -1,50 +1,21 @@
 package polyn
 
 import (
+	"errors"
 	"fmt"
+	"sort"
 
 	"github.com/npillmayer/arithm"
+)
 
-	"github.com/emirpasic/gods/maps"
-	"github.com/emirpasic/gods/maps/treemap"
+var (
+	// ErrEmptyEquationList indicates no equations were supplied to AddEqs.
+	ErrEmptyEquationList = errors.New("empty list of equations")
+	// ErrInconsistentEquation indicates an equation reduced to 0 = c with c != 0.
+	ErrInconsistentEquation = errors.New("inconsistent equation")
 )
 
 /*
-
-BSD License
-
-Copyright (c) 2017–21, Norbert Pillmayer
-
-All rights reserved.
-
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-
-1. Redistributions of source code must retain the above copyright
-notice, this list of conditions and the following disclaimer.
-
-2. Redistributions in binary form must reproduce the above copyright
-notice, this list of conditions and the following disclaimer in the
-documentation and/or other materials provided with the distribution.
-
-3. Neither the name of this software nor the names of its contributors
-may be used to endorse or promote products derived from this software
-without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
-
 ----------------------------------------------------------------------
 
 Objects and interfaces for solving systems of linear equations (LEQ).
@@ -53,16 +24,20 @@ Inspired by Donald E. Knuth's MetaFont, John Hobby's MetaPost and by
 a Lua project by John D. Ramsdell: http://luaforge.net/projects/lineqpp/
 */
 
-// A VariableResolver links to variables.
-// We use an interface to resolve "real" variable names. Within the LEQ
-// variables are encoded by their serial ID, which is used as their position
-// within polynomias. Example: variable "n[3].a" with ID=4711 will become x.4711
-// internally. The resolver maps x.4711 ⟼ "n[3].a", i.e., IDs to names.
+// A VariableResolver links solver variable IDs to "real" variable names.
+//
+// In polynomial notation, terms are keyed by exponent i (a_i * x^i). In LEQ
+// mode, the same key i is interpreted as an internal variable ID x.i.
+// Example: variable "n[3].a" with ID=4711 is represented as x.4711
+// internally. The resolver maps x.4711 to "n[3].a", i.e., IDs to names.
 type VariableResolver interface {
 	GetVariableName(int) string     // get real-life name of x.i
 	SetVariableSolved(int, float64) // message: x.i is solved
 	IsCapsule(int) bool             // x.i has gone out of scope
 }
+
+type EquationMap map[int]Polynomial
+type SolvedMap map[int]Polynomial
 
 // === System of linear equations =======================================
 
@@ -71,27 +46,56 @@ type VariableResolver interface {
 //
 // Inspired by Donald E. Knuth's MetaFont, John Hobby's MetaPost and by
 // a Lua project by John D. Ramsdell: http://luaforge.net/projects/lineqpp/
-//
 type LinEqSolver struct {
-	dependents       *treemap.Map     // dependent variable at position i has dependencies[i]
-	solved           *treemap.Map     // map x.i => numeric
+	dependents       EquationMap      // dependent variable at position i has dependencies[i]
+	solved           SolvedMap        // map x.i => numeric
 	varresolver      VariableResolver // to resolve variable names from term positions
 	showdependencies bool             // continuously show dependent variables
 }
 
-// CreateLinEqSolver creates a new sytem of linear equations.
-func CreateLinEqSolver() *LinEqSolver {
+// NewLinEqSolver creates a new system of linear equations.
+func NewLinEqSolver() *LinEqSolver {
 	leq := LinEqSolver{
-		dependents:       treemap.NewWithIntComparator(), // sorted map
-		solved:           treemap.NewWithIntComparator(), // sorted map
+		dependents:       make(EquationMap),
+		solved:           make(SolvedMap),
 		showdependencies: false,
 	}
 	return &leq
 }
 
+// Adapter helper to keep deterministic ascending iteration over equation maps.
+// Keys are snapshotted so callbacks may remove entries from m safely.
+func forEachEquationAscending(m map[int]Polynomial, fn func(int, Polynomial) error) error {
+	if m == nil {
+		return nil
+	}
+	keys := make([]int, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Ints(keys)
+	for _, i := range keys {
+		v, ok := m[i]
+		if !ok { // key may have been removed by callback
+			continue
+		}
+		if err := fn(i, v); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func equationMapSize(m map[int]Polynomial) int {
+	if m == nil {
+		return 0
+	}
+	return len(m)
+}
+
 // SetVariableResolver sets a variable resolver. Within the LEQ variables are
-// encoded by their serial ID, which is used as their position within
-// polynomias. Example: variable "n[3].a" with ID=4711 will become x.4711
+// encoded by their serial ID, i.e. by the term key/exponent i in this package's
+// sparse term map. Example: variable "n[3].a" with ID=4711 will become x.4711
 // internally. The resolver maps "x.4711" to "n[3].a".
 func (leq *LinEqSolver) SetVariableResolver(resolver VariableResolver) {
 	leq.varresolver = resolver
@@ -100,12 +104,15 @@ func (leq *LinEqSolver) SetVariableResolver(resolver VariableResolver) {
 // Collect all currently solved variables from a system of linear equations.
 // Solved variables are returned as a map: i(var) -> numeric, where i(var) is an
 // integer representing the position of variable var.
-func (leq *LinEqSolver) getSolvedVars() maps.Map {
-	setOfSolved := treemap.NewWithIntComparator() // return value
-	it := leq.solved.Iterator()
-	for it.Next() { // for every x.i = p[x.i = c] => put [x.i = c] into new set
-		setOfSolved.Put(it.Key().(int), it.Value().(Polynomial).GetCoeffForTerm(0))
+func (leq *LinEqSolver) getSolvedVars() map[int]float64 {
+	setOfSolved := make(map[int]float64)
+	if equationMapSize(leq.solved) == 0 {
+		return setOfSolved
 	}
+	_ = forEachEquationAscending(leq.solved, func(i int, p Polynomial) error {
+		setOfSolved[i] = p.GetCoeffForTerm(0) // for every x.i = p[x.i = c]
+		return nil
+	})
 	return setOfSolved
 }
 
@@ -113,104 +120,127 @@ func (leq *LinEqSolver) getSolvedVars() maps.Map {
 // new equation 0 = p (p is Polynomial) to a system of linear equations.
 // Immediately starts to solve the -- possibly incomplete -- system, as
 // far as possible.
-func (leq *LinEqSolver) AddEq(p Polynomial) *LinEqSolver {
-	leq.addEq(p, false)
+func (leq *LinEqSolver) AddEq(p Polynomial) (*LinEqSolver, error) {
+	var err error
+	leq, err = leq.addEq(p, false)
 	if leq.showdependencies {
 		leq.Dump(leq.varresolver)
 	}
-	return leq
+	return leq, err
 }
 
 // AddEqs adds a set of linear equations to the LEQ system.
 // See AddEq.
-func (leq *LinEqSolver) AddEqs(plist []Polynomial) *LinEqSolver {
+func (leq *LinEqSolver) AddEqs(plist []Polynomial) (*LinEqSolver, error) {
 	l := len(plist)
 	if l == 0 {
 		T().Errorf("given empty list of equations")
+		return leq, ErrEmptyEquationList
 	} else {
 		for i, p := range plist {
 			T().Debugf("adding equation %d/%d: 0 = %s", i+1, l, p)
-			leq.addEq(p, i+1 < l)
+			var err error
+			leq, err = leq.addEq(p, i+1 < l)
+			if err != nil {
+				return leq, err
+			}
 		}
 	}
 	if leq.showdependencies {
 		leq.Dump(leq.varresolver)
 	}
-	return leq
+	return leq, nil
 }
 
 // If parameter cont is true, expect another equation immediately after this
 // one. This is necessary to suppress harvesting of capsules.
-func (leq *LinEqSolver) addEq(p Polynomial, cont bool) *LinEqSolver {
+func (leq *LinEqSolver) addEq(p Polynomial, cont bool) (*LinEqSolver, error) {
 	p = p.Zap()
 	T().P("op", "new equation").Infof("0 = %s", leq.PolynString(p))
 	// substitute solved in new equation
 	p = leq.substituteSolved(0, p, leq.solved)
-	if _, off := p.isOff(); !off { //  :-))  no pun intended
+	if coeff, off := p.isOff(); !off { //  :-))  no pun intended
 		// select x.i=p(i)
-		i, _ := p.maxCoeff(leq.dependents)    // start with max (free) coefficient of p
-		p = leq.activateEquationTowards(i, p) // now  x.i = -1/a * p(...).
+		i, _ := p.maxCoeff(leq.dependents) // start with max (free) coefficient of p
+		var err error
+		p, err = leq.activateEquationTowards(i, p) // now  x.i = -1/a * p(...).
+		if err != nil {
+			return leq, err
+		}
 		// Phase 1: substitute P(i) in every x.j=P(j)
-		D := leq.updateDependentVariables(i, p)
+		D, err := leq.updateDependentVariables(i, p)
+		if err != nil {
+			return leq, err
+		}
 		// done, now split solved x from D' off to S'
-		S := treemap.NewWithIntComparator() // set up S' of solved
-		itD := D.Iterator()
-		for itD.Next() { // for every x.i=p(i) in D'
-			i, p = itD.Key().(int), itD.Value().(Polynomial)
+		S := make(SolvedMap)                                                    // set up S' of solved
+		if err := forEachEquationAscending(D, func(i int, p Polynomial) error { // for every x.i=p(i) in D'
 			if ok, rhs := solved(p); ok {
-				S.Put(i, rhs) // add x.i to S'
-				D.Remove(i)   // remove x.i from D'
+				S[i] = rhs   // add x.i to S'
+				delete(D, i) // remove x.i from D'
 			}
+			return nil
+		}); err != nil {
+			return leq, err
 		}
 		// substitute solved: subst s in S' into d in D'
 		//T.Info("---------- subst solved -----------")
-		itD = D.Iterator()
-		for itD.Next() { // for every x.i=p(i) in D'
-			i, p = itD.Key().(int), itD.Value().(Polynomial)
+		if err := forEachEquationAscending(D, func(i int, p Polynomial) error { // for every x.i=p(i) in D'
 			p = leq.substituteSolved(i, p, S)
 			if ok, rhs := solved(p); ok {
-				S.Put(i, rhs) // add x.i to S'
-				D.Remove(i)   // remove x.i from D'
+				S[i] = rhs   // add x.i to S'
+				delete(D, i) // remove x.i from D'
 			}
+			return nil
+		}); err != nil {
+			return leq, err
 		}
 		//T.Info("-----------------------------------")
 		// done, update sets S and D
-		S.Each(func(key interface{}, value interface{}) { // S = S + S'
-			leq.setSolved(key.(int), value.(Polynomial))
+		_ = forEachEquationAscending(S, func(i int, p Polynomial) error { // S = S + S'
+			leq.setSolved(i, p)
+			return nil
 		})
 		leq.dependents = D // D = D'
+	} else if !arithm.Is0(coeff) {
+		return leq, fmt.Errorf("%w: 0 = %s (off by %g)", ErrInconsistentEquation, leq.PolynString(p), coeff)
 	}
 	if !cont { // if this equation is not part of an equation-pair
 		leq.harvestCapsules()
 	}
-	return leq
+	return leq, nil
 }
 
 // 1st pass of the LEQ algorithm: with a new equation x.i=P(i) walk
 // through all dependent variables x.j=P(j) and substitute P(i) for x.i
 // in every RHS.
 // Return a new set D' of dependent variables.
-func (leq *LinEqSolver) updateDependentVariables(i int, p Polynomial) *treemap.Map {
-	D := treemap.NewWithIntComparator() // set up D' of dependents
+func (leq *LinEqSolver) updateDependentVariables(i int, p Polynomial) (EquationMap, error) {
+	D := make(EquationMap) // set up D' of dependents
 	leq.updateDependency(i, p, D)
 	// D -> D'
-	it := leq.dependents.Iterator() // for all dependent x.j=q(j)
 	savei := i
 	T().Debugf("---------- subst dep --------------")
-	for it.Next() { // iterate over all dependent variables
+	err := forEachEquationAscending(leq.dependents, func(j int, q Polynomial) error { // iterate over all dependent variables
 		i = savei // restore i
-		tmp, _ := D.Get(i)
-		p = tmp.(Polynomial).CopyPolynomial() // get current version of p(i)
-		j, q := it.Key().(int), it.Value().(Polynomial)
+		tmp, ok := D[i]
+		if !ok {
+			return fmt.Errorf("internal solver state missing dependency for %s", leq.VarString(i))
+		}
+		p = tmp.CopyPolynomial() // get current version of p(i)
 		T().P("op", "substitute").Debugf("(1) p(%s) in %s = %s",
 			leq.VarString(i), leq.VarString(j), leq.PolynString(q))
 		if j == i { // x.j = x.i, i.e. equations with identical LHS
-			k, _ := q.maxCoeff(D)                 // start with max (free) coefficient of q(j=i)
-			lhs := NewConstantPolynomial(0.0)     // construct LHS as pp
-			lhs.SetTerm(j, -1.0)                  // now LHS is { 0 - 1 x.j }
-			q = q.Add(lhs, false)                 // move to RHS
-			q = leq.activateEquationTowards(k, q) // now  x.k = -1/a.k * p(... x.j ...).
-			j = k                                 // ride the new horse
+			k, _ := q.maxCoeff(D)             // start with max (free) coefficient of q(j=i)
+			lhs := NewConstantPolynomial(0.0) // construct LHS as pp
+			lhs.SetTerm(j, -1.0)              // now LHS is { 0 - 1 x.j }
+			q = q.Add(lhs, false)             // move to RHS
+			var err error
+			q, err = leq.activateEquationTowards(k, q) // now  x.k = -1/a.k * p(... x.j ...).
+			if err != nil {
+				return err
+			}
+			j = k // ride the new horse
 		}
 		T().P("op", "substitute").Debugf("(2) p(%s) in %s = %s",
 			leq.VarString(i), leq.VarString(j), leq.PolynString(q))
@@ -222,21 +252,34 @@ func (leq *LinEqSolver) updateDependentVariables(i int, p Polynomial) *treemap.M
 		T().P("op", "substitute").Debugf("(3) p(%s) in %s = %s",
 			leq.VarString(i), leq.VarString(j), leq.PolynString(q))
 		if termContains(q, i) {
-			j, q = subst(i, p, j, q) // substitute new equation in x.j=q(j)
+			var err error
+			j, q, err = subst(i, p, j, q) // substitute new equation in x.j=q(j)
+			if err != nil {
+				return err
+			}
 			T().P("op", "substitute").Debugf("result: %s = %s", leq.VarString(j), leq.PolynString(q))
 			if j != 0 {
 				leq.updateDependency(j, q, D) // insert substitution result
 			} else { // j has been eliminated from q
-				if _, off := q.isOff(); !off {
+				if coeff, off := q.isOff(); !off {
 					k, _ := q.maxCoeff(D) // find max (free) coefficient of q(k)
-					q = leq.activateEquationTowards(k, q)
+					q, err = leq.activateEquationTowards(k, q)
+					if err != nil {
+						return err
+					}
 					leq.updateDependency(k, q, D) // insert new equation
+				} else if !arithm.Is0(coeff) {
+					return fmt.Errorf("%w: 0 = %s (off by %g)", ErrInconsistentEquation, leq.PolynString(q), coeff)
 				}
 			}
 		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	T().Debugf("-----------------------------------")
-	return D
+	return D, nil
 }
 
 // Check if a polynomial is constant, i.e. solves an equation.
@@ -255,21 +298,21 @@ func termContains(p Polynomial, i int) bool {
 }
 
 // Insert or replace x.i=p(i) in a set of equations.
-func (leq *LinEqSolver) updateDependency(i int, p Polynomial, m *treemap.Map) {
+func (leq *LinEqSolver) updateDependency(i int, p Polynomial, m map[int]Polynomial) {
 	p = p.CopyPolynomial()
 	//fmt.Printf("inserting x.%d = %v\n", i, p)
-	if q, found := m.Get(i); found {
+	if q, found := m[i]; found {
 		//fmt.Printf("found     x.%d = %v\n", i, q)
-		if termlength(p) < termlength(q.(Polynomial)) { // prefer shorter RHS terms
+		if termlength(p) < termlength(q) { // prefer shorter RHS terms
 			varname := leq.VarString(i)
 			T().P("var", varname).Infof("## %s = %s", varname, leq.PolynString(p))
-			m.Put(i, p) // replace equation x.i=p(i)
+			m[i] = p // replace equation x.i=p(i)
 		}
 	} else {
-		m.Put(i, p) // insert new equation x.i=p(i)
+		m[i] = p // insert new equation x.i=p(i)
 	}
 	/*
-		pp, ok := m.Get(i)
+		pp, ok := m[i]
 		if !ok {
 			T.Errorf("not found: x.%d", i)
 		}
@@ -282,48 +325,53 @@ func (leq *LinEqSolver) updateDependency(i int, p Polynomial, m *treemap.Map) {
 // for x.j. This may result in the elimination of x.j. We then return 0=q'.
 //
 // Returns the resulting - possibly new - equation.
-func subst(i int, p Polynomial, j int, q Polynomial) (int, Polynomial) {
+func subst(i int, p Polynomial, j int, q Polynomial) (int, Polynomial, error) {
 	ai := q.GetCoeffForTerm(i) // a.i in q
 	if !arithm.Is0(ai) {       // if variable x.i exists in q
-		q.Terms.Remove(i)                               // remove a.i*x.i in q (to be replaced)
-		p = p.Multiply(NewConstantPolynomial(ai), true) // scale p(i) by a.i of q
-		q = q.Add(p, false).Zap()                       // now insert p(i) into q(j)
-		aj := q.GetCoeffForTerm(j)                      // results in a.j*x.j in q(j) ?
-		if arithm.Is0(aj) {                             // no => we're done
+		delete(q.terms, i) // remove a.i*x.i in q (to be replaced)
+		var err error
+		p, err = p.Multiply(NewConstantPolynomial(ai), true) // scale p(i) by a.i of q
+		if err != nil {
+			return 0, Polynomial{}, err
+		}
+		q = q.Add(p, false).Zap()  // now insert p(i) into q(j)
+		aj := q.GetCoeffForTerm(j) // results in a.j*x.j in q(j) ?
+		if arithm.Is0(aj) {        // no => we're done
 			// do nothing
 		} else if arithm.Is1(aj) { // x.j = c + x.j + ...  => eliminate x.j and activate for free x.k
-			q.Terms.Remove(j) // remove x.j from RHS q
-			j = 0             // set LHS to 'impossible' variable x.0
+			delete(q.terms, j) // remove x.j from RHS q
+			j = 0              // set LHS to 'impossible' variable x.0
 		} else { // x.j = c + a.j*x.j + ...  => scale RHS by -1(a.j-1)
-			a := -1.0 / (aj - 1.0)         // a = -1/(a.j-1)
-			c := NewConstantPolynomial(a)  //
-			q.Terms.Remove(j)              // now remove a.j*x.j from RHS q
-			q = q.Multiply(c, false).Zap() // and multiply RHS by -1/(a.j-1)
+			a := -1.0 / (aj - 1.0)        // a = -1/(a.j-1)
+			c := NewConstantPolynomial(a) //
+			delete(q.terms, j)            // now remove a.j*x.j from RHS q
+			q, err = q.Multiply(c, false) // and multiply RHS by -1/(a.j-1)
+			if err != nil {
+				return 0, Polynomial{}, err
+			}
+			q = q.Zap()
 		}
 	}
-	return j, q // return x.j = q'(j)
+	return j, q, nil // return x.j = q'(j)
 
 }
 
 // Helper: number of variables in RHS of an equation.
 func termlength(p Polynomial) int {
-	return p.Terms.Size()
+	return p.TermCount()
 }
 
 // In an equation, substitute all variables which are already known.
-func (leq *LinEqSolver) substituteSolved(j int, p Polynomial, solved *treemap.Map) Polynomial {
-	//it := leq.solved.Iterator()
-	it := solved.Iterator()
+func (leq *LinEqSolver) substituteSolved(j int, p Polynomial, solved map[int]Polynomial) Polynomial {
 	T().Debugf("---------- subst solved -----------")
-	for it.Next() { // iterate over all solved x.i = c
-		i := it.Key().(int)
-		c := it.Value().(Polynomial).GetConstantValue()
+	_ = forEachEquationAscending(solved, func(i int, rhs Polynomial) error { // iterate over all solved x.i = c
+		c := rhs.GetConstantValue()
 		coeff := p.GetCoeffForTerm(i)
 		if !arithm.Is0(coeff) {
 			coeff = coeff * c
 			pc := p.GetConstantValue()
 			p.SetTerm(0, pc+coeff)
-			p.Terms.Remove(i)
+			delete(p.terms, i)
 			T().P("op", "subst-solved").Debugf("%s = %g  =>  RHS = %s",
 				leq.VarString(i), c, leq.PolynString(p))
 			if j > 0 {
@@ -333,23 +381,31 @@ func (leq *LinEqSolver) substituteSolved(j int, p Polynomial, solved *treemap.Ma
 				T().P("op", "subst known").Infof("# 0 = %s", leq.PolynString(p))
 			}
 		}
-	}
+		return nil
+	})
 	T().Debugf("-----------------------------------")
 	return p
 }
 
 // Transform an equation 0 = p(a x.i) to make x.i the dependent variable, i.e.
 // x.i = -1/a * p(...).
-//
-func (leq *LinEqSolver) activateEquationTowards(i int, p Polynomial) Polynomial {
+func (leq *LinEqSolver) activateEquationTowards(i int, p Polynomial) (Polynomial, error) {
 	coeff := p.GetCoeffForTerm(i)
-	p.Terms.Remove(i) // remove term x.i from RHS(p)
+	if arithm.Is0(coeff) {
+		return Polynomial{}, fmt.Errorf("cannot activate equation towards %s: zero coefficient", leq.VarString(i))
+	}
+	delete(p.terms, i) // remove term x.i from RHS(p)
 	pp := NewConstantPolynomial(-1.0 / coeff)
-	p = p.Multiply(pp, true).Zap()
+	var err error
+	p, err = p.Multiply(pp, true)
+	if err != nil {
+		return Polynomial{}, err
+	}
+	p = p.Zap()
 	//T.P("op", "activate").Infof("## %s = %s", leq.VarString(i), leq.PolynString(p))
 	varname := leq.VarString(i)
 	T().P("var", varname).Infof("## %s = %s", varname, leq.PolynString(p))
-	return p
+	return p, nil
 }
 
 // Mark a variable as solved. Sends a message to the variable resolver.
@@ -357,7 +413,7 @@ func (leq *LinEqSolver) setSolved(i int, p Polynomial) {
 	c := p.GetConstantValue()
 	varname := leq.VarString(i)
 	T().P("var", varname).Infof("#### %s = %g", varname, c)
-	leq.solved.Put(i, p) // move x.i to set of solved variables
+	leq.solved[i] = p // move x.i to set of solved variables
 	if leq.varresolver != nil {
 		leq.varresolver.SetVariableSolved(i, c) // notify variable solver
 	}
@@ -400,24 +456,19 @@ func (leq *LinEqSolver) PolynString(p Polynomial) string {
 // is still relevant for solving the LEQ.
 func (leq *LinEqSolver) harvestCapsules() {
 	var counts = make(map[int]int)
-	it := leq.dependents.Iterator()
-	for it.Next() { // iterate over all dependent x.w = p.w ( c ... { a x.v } ... )
-		w := it.Key().(int)
-		pw := it.Value().(Polynomial)
+	_ = forEachEquationAscending(leq.dependents, func(w int, pw Polynomial) error { // iterate over all dependent x.w = p.w
 		leq.checkAndCountCapsule(w, counts) // check LHS variable
-		pit := pw.Terms.Iterator()          // for all terms in polynomial
-		for pit.Next() {
-			i := pit.Key().(int) // get every term.i
-			if i > 0 {           // omit constant term
+		for _, i := range pw.Exponents() {  // get every term.i
+			if i > 0 { // omit constant term
 				leq.checkAndCountCapsule(i, counts)
 			}
 		}
-	}
-	itsolv := leq.solved.Iterator() // count solved capsules
-	for itsolv.Next() {
-		j := itsolv.Key().(int)
+		return nil
+	})
+	_ = forEachEquationAscending(leq.solved, func(j int, _ Polynomial) error { // count solved capsules
 		leq.checkAndCountCapsule(j, counts)
-	}
+		return nil
+	})
 	for pos, count := range counts { // now remove capsules with count == 1
 		if count == 1 { // only remove loners
 			T().P("capsule", pos).Debugf("capsule removed")
@@ -443,24 +494,22 @@ func (leq *LinEqSolver) checkAndCountCapsule(i int, counts map[int]int) {
  * I'll clean this up sometime later... :-)
  */
 func (leq *LinEqSolver) retractVariable(i int) {
-	if _, ok := leq.solved.Get(i); ok {
+	if _, ok := leq.solved[i]; ok {
 		T().Debugf("unsolve %s", leq.VarString(i))
-		leq.solved.Remove(i)
+		delete(leq.solved, i)
 	}
-	leq.dependents.Remove(i)              // possibly remove from dependents
-	eqs := treemap.NewWithIntComparator() // set of equation indices, i.e. int
-	it := leq.dependents.Iterator()
-	for it.Next() { // iterate over all dependent x.j = p.i ( c ... { a x.i } ... )
-		j := it.Key().(int)
-		p := it.Value().(Polynomial)
+	delete(leq.dependents, i)                                                      // possibly remove from dependents
+	eqs := make(EquationMap)                                                       // set of equation indices, i.e. int
+	_ = forEachEquationAscending(leq.dependents, func(j int, p Polynomial) error { // iterate over dependents
 		if a := p.GetCoeffForTerm(i); !arithm.Is0(a) { // yes, x.i in p
-			eqs.Put(j, p) // mark for deletion, as it is invalid now
+			eqs[j] = p // mark for deletion, as it is invalid now
 		}
-	}
-	it = eqs.Iterator()
-	for it.Next() { // iterate over marked equations
-		leq.dependents.Remove(it.Key().(int))
-	}
+		return nil
+	})
+	_ = forEachEquationAscending(eqs, func(j int, _ Polynomial) error { // iterate over marked equations
+		delete(leq.dependents, j)
+		return nil
+	})
 }
 
 // === Utilities =============================================================
@@ -469,18 +518,14 @@ func (leq *LinEqSolver) retractVariable(i int) {
 func (leq *LinEqSolver) Dump(resolv VariableResolver) {
 	fmt.Println("----------------------------------------------------------------------")
 	fmt.Println("Dependents:                                                        LEQ")
-	it := leq.dependents.Iterator()
-	for it.Next() { // for every x.i = p[x.i]
-		k := it.Key().(int)
-		p := it.Value().(Polynomial)
+	_ = forEachEquationAscending(leq.dependents, func(k int, p Polynomial) error { // for every x.i = p[x.i]
 		fmt.Printf("\t%s = %s\n", TraceStringVar(k, resolv), p.TraceString(resolv))
-	}
+		return nil
+	})
 	fmt.Println("Solved:")
-	it = leq.solved.Iterator()
-	for it.Next() { // for every x.i = { c }
-		k := it.Key().(int)
-		p := it.Value().(Polynomial)
+	_ = forEachEquationAscending(leq.solved, func(k int, p Polynomial) error { // for every x.i = { c }
 		fmt.Printf("\t%s = %g\n", TraceStringVar(k, resolv), p.GetConstantValue())
-	}
+		return nil
+	})
 	fmt.Println("----------------------------------------------------------------------")
 }
